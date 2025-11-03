@@ -16,4 +16,6 @@ interface AudioStorage {
     suspend fun hasMinimumStorage(requiredBytes: Long): Boolean
     
     suspend fun cleanup(olderThanMs: Long): Result<Unit>
+    
+    suspend fun getSessionAudioFiles(sessionId: String): Result<List<File>>
 }

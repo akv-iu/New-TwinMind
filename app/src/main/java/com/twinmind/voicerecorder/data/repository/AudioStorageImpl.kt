@@ -118,6 +118,28 @@ class AudioStorageImpl @Inject constructor(
         }
     }
     
+    override suspend fun getSessionAudioFiles(sessionId: String): Result<List<File>> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val sessionFiles = audioDir.listFiles()
+                    ?.filter { it.name.startsWith("${sessionId}_") }
+                    ?.sortedBy { fileName ->
+                        // Extract sequence number for proper ordering
+                        val parts = fileName.name.split("_")
+                        if (parts.size >= 2) parts[1].toIntOrNull() ?: 0 else 0
+                    } ?: emptyList()
+                
+                if (sessionFiles.isNotEmpty()) {
+                    Result.success(sessionFiles)
+                } else {
+                    Result.failure(IllegalArgumentException("No audio files found for session: $sessionId"))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+    
     private fun writeWavHeader(fos: FileOutputStream, audioDataSize: Int) {
         val totalSize = audioDataSize + 36
         val sampleRate = 44100

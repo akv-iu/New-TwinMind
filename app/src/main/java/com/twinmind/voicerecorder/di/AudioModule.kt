@@ -1,8 +1,12 @@
 package com.twinmind.voicerecorder.di
 
+import com.twinmind.voicerecorder.data.audio.AudioPlayerImpl
+import com.twinmind.voicerecorder.data.repository.AudioChunkRepositoryImpl
 import com.twinmind.voicerecorder.data.repository.AudioRecorderImpl
 import com.twinmind.voicerecorder.data.repository.AudioStorageImpl
 import com.twinmind.voicerecorder.data.repository.SessionRepositoryImpl
+import com.twinmind.voicerecorder.domain.audio.AudioPlayer
+import com.twinmind.voicerecorder.domain.repository.AudioChunkRepository
 import com.twinmind.voicerecorder.domain.repository.AudioRecorder
 import com.twinmind.voicerecorder.domain.repository.AudioStorage
 import com.twinmind.voicerecorder.domain.repository.SessionRepository
@@ -27,4 +31,12 @@ abstract class AudioModule {
     @Binds
     @Singleton
     abstract fun bindSessionRepository(sessionRepositoryImpl: SessionRepositoryImpl): SessionRepository
+    
+    @Binds
+    @Singleton
+    abstract fun bindAudioPlayer(audioPlayerImpl: AudioPlayerImpl): AudioPlayer
+    
+    @Binds
+    @Singleton
+    abstract fun bindAudioChunkRepository(audioChunkRepositoryImpl: AudioChunkRepositoryImpl): AudioChunkRepository
 }

@@ -5,6 +5,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import com.twinmind.voicerecorder.domain.model.AudioChunk
 import com.twinmind.voicerecorder.domain.model.RecordingState
+import com.twinmind.voicerecorder.domain.repository.AudioChunkRepository
 import com.twinmind.voicerecorder.domain.repository.AudioRecorder
 import com.twinmind.voicerecorder.domain.repository.AudioStorage
 import kotlinx.coroutines.CoroutineScope
@@ -22,7 +23,8 @@ import javax.inject.Singleton
 
 @Singleton
 class AudioRecorderImpl @Inject constructor(
-    private val audioStorage: AudioStorage
+    private val audioStorage: AudioStorage,
+    private val chunkRepository: AudioChunkRepository
 ) : AudioRecorder {
     
     private val recordingScope = CoroutineScope(Dispatchers.IO + Job())
@@ -98,6 +100,9 @@ class AudioRecorderImpl @Inject constructor(
     
     override fun stopRecording(): Result<Unit> {
         return try {
+            // Set state to STOPPED so the recording loop exits and saves remaining data
+            _recordingState.value = RecordingState.STOPPED
+            
             recordingJob?.cancel()
             audioRecord?.apply {
                 if (recordingState == AudioRecord.RECORDSTATE_RECORDING) {
@@ -107,7 +112,6 @@ class AudioRecorderImpl @Inject constructor(
             }
             audioRecord = null
             currentSessionId = null
-            _recordingState.value = RecordingState.STOPPED
             
             // Reset to IDLE after a brief moment so the recorder can be reused
             recordingScope.launch {
@@ -123,8 +127,10 @@ class AudioRecorderImpl @Inject constructor(
     
     override fun pauseRecording(): Result<Unit> {
         return try {
-            audioRecord?.stop()
-            _recordingState.value = RecordingState.PAUSED
+            if (_recordingState.value == RecordingState.RECORDING) {
+                _recordingState.value = RecordingState.PAUSED
+                // Don't stop AudioRecord, just change state to pause data collection
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -133,8 +139,10 @@ class AudioRecorderImpl @Inject constructor(
     
     override fun resumeRecording(): Result<Unit> {
         return try {
-            audioRecord?.startRecording()
-            _recordingState.value = RecordingState.RECORDING
+            if (_recordingState.value == RecordingState.PAUSED) {
+                _recordingState.value = RecordingState.RECORDING
+                // AudioRecord continues running, just resume data collection
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -154,6 +162,8 @@ class AudioRecorderImpl @Inject constructor(
     
     private suspend fun recordInChunks() {
         val sessionId = currentSessionId ?: return
+        android.util.Log.d("AudioRecorder", "Starting recordInChunks for session: $sessionId")
+        
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             CHANNEL_CONFIG,
@@ -165,21 +175,49 @@ class AudioRecorderImpl @Inject constructor(
         val chunkStartTime = System.currentTimeMillis()
         
         var lastChunkTime = chunkStartTime
+        var recordingStartTime = System.currentTimeMillis()  // Track when recording actually started
+        var totalPausedTime = 0L  // Track total time spent in paused state
         
-        while (recordingScope.isActive && _recordingState.value == RecordingState.RECORDING) {
+        var pauseStartTime = 0L
+        
+        while (recordingScope.isActive && _recordingState.value != RecordingState.STOPPED && _recordingState.value != RecordingState.ERROR) {
             val audioRecord = this.audioRecord ?: break
+            val currentTime = System.currentTimeMillis()
             
-            val bytesRead = audioRecord.read(buffer, 0, buffer.size)
-            if (bytesRead > 0) {
-                chunkData.addAll(buffer.take(bytesRead))
-                
-                // Check if we've reached 30 seconds
-                val currentTime = System.currentTimeMillis()
-                if (currentTime - lastChunkTime >= CHUNK_DURATION_MS) {
-                    saveChunk(sessionId, chunkData.toByteArray(), lastChunkTime, currentTime - lastChunkTime)
-                    chunkData.clear()
-                    lastChunkTime = currentTime
-                    chunkSequenceNumber++
+            // Track paused time
+            if (_recordingState.value == RecordingState.PAUSED) {
+                if (pauseStartTime == 0L) {
+                    pauseStartTime = currentTime
+                }
+                delay(100) // Longer delay when paused
+                continue
+            } else {
+                // If we were paused, add the pause duration to total paused time
+                if (pauseStartTime > 0L) {
+                    totalPausedTime += (currentTime - pauseStartTime)
+                    pauseStartTime = 0L
+                }
+            }
+            
+            // Only read data when actually recording (not paused)
+            if (_recordingState.value == RecordingState.RECORDING) {
+                val bytesRead = audioRecord.read(buffer, 0, buffer.size)
+                if (bytesRead > 0) {
+                    chunkData.addAll(buffer.take(bytesRead))
+                    
+                    // Calculate actual recording time (excluding pauses)
+                    val actualRecordingTime = currentTime - recordingStartTime - totalPausedTime
+                    
+                    // Check if we've reached 30 seconds of actual recording time
+                    if (actualRecordingTime >= CHUNK_DURATION_MS) {
+                        android.util.Log.d("AudioRecorder", "Saving 30-second chunk - Sequence: $chunkSequenceNumber, Size: ${chunkData.size}, ActualTime: ${actualRecordingTime}ms")
+                        saveChunk(sessionId, chunkData.toByteArray(), lastChunkTime, CHUNK_DURATION_MS)
+                        chunkData.clear()
+                        lastChunkTime = currentTime
+                        recordingStartTime = currentTime  // Reset start time for next chunk
+                        totalPausedTime = 0L  // Reset paused time for next chunk
+                        chunkSequenceNumber++
+                    }
                 }
             }
             
@@ -190,8 +228,16 @@ class AudioRecorderImpl @Inject constructor(
         // Save any remaining data
         if (chunkData.isNotEmpty()) {
             val currentTime = System.currentTimeMillis()
-            saveChunk(sessionId, chunkData.toByteArray(), lastChunkTime, currentTime - lastChunkTime)
+            // Calculate final chunk duration
+            val finalChunkDuration = currentTime - recordingStartTime - totalPausedTime
+            android.util.Log.d("AudioRecorder", "Saving final chunk - Size: ${chunkData.size}, Duration: ${finalChunkDuration}ms")
+            saveChunk(sessionId, chunkData.toByteArray(), lastChunkTime, finalChunkDuration)
+            android.util.Log.d("AudioRecorder", "Final chunk saved successfully")
+        } else {
+            android.util.Log.d("AudioRecorder", "No remaining data to save")
         }
+        
+        android.util.Log.d("AudioRecorder", "recordInChunks loop exited for session: $sessionId")
     }
     
     private suspend fun saveChunk(
@@ -210,12 +256,28 @@ class AudioRecorderImpl @Inject constructor(
             sizeBytes = audioData.size.toLong()
         )
         
+        android.util.Log.d("AudioRecorder", "Saving chunk for session: $sessionId, sequence: $chunkSequenceNumber, size: ${audioData.size}")
+        
         audioStorage.saveAudioChunk(audioData, chunk).onSuccess { file ->
+            android.util.Log.d("AudioRecorder", "Chunk saved successfully: ${file.name}")
             val updatedChunk = chunk.copy(filePath = file.absolutePath)
+            
+            // Save chunk to database synchronously in the current context
+            try {
+                kotlinx.coroutines.runBlocking {
+                    chunkRepository.saveChunk(updatedChunk)
+                }
+                android.util.Log.d("AudioRecorder", "Chunk saved to database: ${updatedChunk.id}")
+            } catch (e: Exception) {
+                android.util.Log.e("AudioRecorder", "Failed to save chunk to database", e)
+            }
+            
+            // Update in-memory list
             val currentChunks = _audioChunks.value.toMutableList()
             currentChunks.add(updatedChunk)
             _audioChunks.value = currentChunks
-        }.onFailure {
+        }.onFailure { error ->
+            android.util.Log.e("AudioRecorder", "Failed to save chunk", error)
             _recordingState.value = RecordingState.ERROR
         }
     }

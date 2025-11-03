@@ -95,20 +95,29 @@ class RecordingService : Service() {
     private fun startRecording() {
         try {
             currentSessionId = UUID.randomUUID().toString()
-            startForeground(NOTIFICATION_ID, createRecordingNotification("Starting..."))
+            if (android.os.Build.VERSION.SDK_INT >= 29) { // API 29 (Android 10)
+                startForeground(NOTIFICATION_ID, createRecordingNotification("Starting..."), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            } else {
+                startForeground(NOTIFICATION_ID, createRecordingNotification("Starting..."))
+            }
             
             currentSessionId?.let { sessionId ->
+                // Create session in database FIRST, then start recording
                 serviceScope.launch {
-                    // Create session in database with the same ID
-                    val title = "Recording ${java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
-                    sessionRepository.createSessionWithId(sessionId, title)
-                }
-                
-                val result = audioRecorder.startRecording(sessionId)
-                if (result.isSuccess) {
-                    startTimer()
-                } else {
-                    updateNotification("Error: ${result.exceptionOrNull()?.message}")
+                    try {
+                        val title = "Recording ${java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
+                        sessionRepository.createSessionWithId(sessionId, title)
+                        
+                        // Start recording after database session is created
+                        val result = audioRecorder.startRecording(sessionId)
+                        if (result.isSuccess) {
+                            startTimer()
+                        } else {
+                            updateNotification("Error: ${result.exceptionOrNull()?.message}")
+                        }
+                    } catch (e: Exception) {
+                        updateNotification("Error creating session: ${e.message}")
+                    }
                 }
             }
         } catch (e: SecurityException) {

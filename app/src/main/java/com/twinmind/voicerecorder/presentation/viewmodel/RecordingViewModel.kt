@@ -95,7 +95,11 @@ class RecordingViewModel @Inject constructor(
         val intent = Intent(context, RecordingService::class.java).apply {
             action = RecordingService.ACTION_START_RECORDING
         }
-        context.startForegroundService(intent)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
     }
     
     fun stopRecording() {

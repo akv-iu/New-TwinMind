@@ -126,7 +126,7 @@ fun RecordingScreen(
                 // Main Record/Stop Button
                 Button(
                     onClick = {
-                        if (isRecording) {
+                        if (isRecording || recordingState == RecordingState.PAUSED) {
                             viewModel.stopRecording()
                         } else {
                             onStartRecording()
@@ -134,14 +134,14 @@ fun RecordingScreen(
                     },
                     modifier = Modifier.size(width = 140.dp, height = 56.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isRecording) 
+                        containerColor = if (isRecording || recordingState == RecordingState.PAUSED) 
                             MaterialTheme.colorScheme.error 
                         else 
                             MaterialTheme.colorScheme.primary
                     )
                 ) {
                     Text(
-                        text = if (isRecording) "STOP" else "START",
+                        text = if (isRecording || recordingState == RecordingState.PAUSED) "STOP" else "START",
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -152,7 +152,8 @@ fun RecordingScreen(
             // Status Text
             Text(
                 text = when {
-                    isRecording -> "Recording in progress. Tap STOP when finished."
+                    recordingState == RecordingState.PAUSED -> "Recording paused. Tap RESUME to continue or STOP to finish."
+                    isRecording -> "Recording in progress. Tap PAUSE or STOP when needed."
                     recordingState == RecordingState.STOPPED -> "Recording saved successfully!"
                     else -> "Tap START to begin recording your voice."
                 },

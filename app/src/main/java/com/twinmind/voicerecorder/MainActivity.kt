@@ -55,10 +55,18 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun startRecordingWithPermissions() {
-        val requiredPermissions = arrayOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.POST_NOTIFICATIONS
-        )
+        val requiredPermissions = mutableListOf(
+            Manifest.permission.RECORD_AUDIO
+        ).apply {
+            // Add notification permission for Android 13+ (API 33)
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            // Add foreground service microphone permission for Android 14+ (API 34)  
+            if (android.os.Build.VERSION.SDK_INT >= 34) {
+                add(Manifest.permission.FOREGROUND_SERVICE_MICROPHONE)
+            }
+        }.toTypedArray()
         
         val missingPermissions = requiredPermissions.filter { permission ->
             ContextCompat.checkSelfPermission(this, permission) != PermissionChecker.PERMISSION_GRANTED
