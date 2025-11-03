@@ -67,6 +67,7 @@ fun RecordingScreen(
                             RecordingState.RECORDING -> "Recording..."
                             RecordingState.PAUSED -> "Paused"
                             RecordingState.PAUSED_FOCUS_LOSS -> "Paused – Audio Focus Lost"
+                            RecordingState.PAUSED_PHONE_CALL -> "Paused – Phone Call"
                             RecordingState.STOPPED -> "Recording Complete"
                             RecordingState.ERROR -> "Error Occurred"
                             else -> "Ready to Record"
@@ -111,16 +112,19 @@ fun RecordingScreen(
                     ) {
                         Text("PAUSE")
                     }
-                } else if (recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS) {
+                } else if (recordingState == RecordingState.PAUSED || 
+                          recordingState == RecordingState.PAUSED_FOCUS_LOSS || 
+                          recordingState == RecordingState.PAUSED_PHONE_CALL) {
                     // Resume Button
                     OutlinedButton(
                         onClick = { viewModel.resumeRecording() },
                         modifier = Modifier.size(width = 120.dp, height = 56.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = if (recordingState == RecordingState.PAUSED_FOCUS_LOSS) 
-                                MaterialTheme.colorScheme.error 
-                            else 
-                                MaterialTheme.colorScheme.primary
+                            contentColor = when (recordingState) {
+                                RecordingState.PAUSED_FOCUS_LOSS -> MaterialTheme.colorScheme.error
+                                RecordingState.PAUSED_PHONE_CALL -> MaterialTheme.colorScheme.tertiary
+                                else -> MaterialTheme.colorScheme.primary
+                            }
                         )
                     ) {
                         Text("RESUME")
@@ -130,7 +134,7 @@ fun RecordingScreen(
                 // Main Record/Stop Button
                 Button(
                     onClick = {
-                        if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS) {
+                        if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL) {
                             viewModel.stopRecording()
                         } else {
                             onStartRecording()
@@ -138,14 +142,14 @@ fun RecordingScreen(
                     },
                     modifier = Modifier.size(width = 140.dp, height = 56.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS) 
+                        containerColor = if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL) 
                             MaterialTheme.colorScheme.error 
                         else 
                             MaterialTheme.colorScheme.primary
                     )
                 ) {
                     Text(
-                        text = if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS) "STOP" else "START",
+                        text = if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL) "STOP" else "START",
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -157,7 +161,8 @@ fun RecordingScreen(
             Text(
                 text = when {
                     recordingState == RecordingState.PAUSED -> "Recording paused. Tap RESUME to continue or STOP to finish."
-                    recordingState == RecordingState.PAUSED_FOCUS_LOSS -> "Recording paused due to audio focus loss (call, music, etc.). Tap RESUME to continue or STOP to finish."
+                    recordingState == RecordingState.PAUSED_FOCUS_LOSS -> "Recording paused due to audio focus loss (music, other apps). Tap RESUME to continue or STOP to finish."
+                    recordingState == RecordingState.PAUSED_PHONE_CALL -> "Recording paused due to phone call. Tap RESUME after call ends or STOP to finish."
                     isRecording -> "Recording in progress. Tap PAUSE or STOP when needed."
                     recordingState == RecordingState.STOPPED -> "Recording saved successfully!"
                     else -> "Tap START to begin recording your voice."

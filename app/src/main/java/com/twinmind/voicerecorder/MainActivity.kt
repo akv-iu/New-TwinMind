@@ -56,7 +56,8 @@ class MainActivity : ComponentActivity() {
     
     private fun startRecordingWithPermissions() {
         val requiredPermissions = mutableListOf(
-            Manifest.permission.RECORD_AUDIO
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE  // For phone call detection
         ).apply {
             // Add notification permission for Android 13+ (API 33)
             if (android.os.Build.VERSION.SDK_INT >= 33) {

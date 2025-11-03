@@ -8,6 +8,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
+import android.telephony.TelephonyManager
 import com.twinmind.voicerecorder.domain.model.AudioChunk
 import com.twinmind.voicerecorder.domain.model.RecordingState
 import com.twinmind.voicerecorder.domain.repository.AudioChunkRepository
@@ -46,6 +47,7 @@ class AudioRecorderImpl @Inject constructor(
     
     // Audio Focus Management
     private val audioManager: AudioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val telephonyManager: TelephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
     private var audioFocusRequest: AudioFocusRequest? = null
     private var wasRecordingBeforeFocusLoss = false
     
@@ -227,8 +229,10 @@ class AudioRecorderImpl @Inject constructor(
             val audioRecord = this.audioRecord ?: break
             val currentTime = System.currentTimeMillis()
             
-            // Track paused time (includes both manual pause and audio focus loss)
-            if (_recordingState.value == RecordingState.PAUSED || _recordingState.value == RecordingState.PAUSED_FOCUS_LOSS) {
+            // Track paused time (includes manual pause, audio focus loss, and phone calls)
+            if (_recordingState.value == RecordingState.PAUSED || 
+                _recordingState.value == RecordingState.PAUSED_FOCUS_LOSS || 
+                _recordingState.value == RecordingState.PAUSED_PHONE_CALL) {
                 if (pauseStartTime == 0L) {
                     pauseStartTime = currentTime
                 }
@@ -373,16 +377,74 @@ class AudioRecorderImpl @Inject constructor(
         // Only pause if currently recording
         if (_recordingState.value == RecordingState.RECORDING) {
             wasRecordingBeforeFocusLoss = true
-            // Directly set the focus loss state instead of calling pauseRecording()
-            _recordingState.value = RecordingState.PAUSED_FOCUS_LOSS
+            
+            // Check if this is due to a phone call with enhanced detection
+            val isPhoneCall = try {
+                val callState = telephonyManager.callState
+                android.util.Log.d("AudioRecorder", "Current telephony call state: $callState")
+                
+                // Check current call state
+                val currentCallActive = callState != TelephonyManager.CALL_STATE_IDLE
+                
+                // Also check AudioManager for call-related audio mode
+                val audioMode = audioManager.mode
+                android.util.Log.d("AudioRecorder", "Current audio mode: $audioMode")
+                val audioModeCall = audioMode == AudioManager.MODE_IN_CALL || 
+                                  audioMode == AudioManager.MODE_IN_COMMUNICATION ||
+                                  audioMode == AudioManager.MODE_CALL_SCREENING
+                
+                val isCall = currentCallActive || audioModeCall
+                android.util.Log.d("AudioRecorder", "Phone call detected - CallState: $currentCallActive, AudioMode: $audioModeCall, Final: $isCall")
+                
+                isCall
+            } catch (e: SecurityException) {
+                android.util.Log.w("AudioRecorder", "No permission to check phone state: ${e.message}")
+                // Fallback: check audio mode only
+                val audioMode = audioManager.mode
+                val isCallMode = audioMode == AudioManager.MODE_IN_CALL || 
+                               audioMode == AudioManager.MODE_IN_COMMUNICATION ||
+                               audioMode == AudioManager.MODE_CALL_SCREENING
+                android.util.Log.d("AudioRecorder", "Fallback audio mode check: $audioMode, isCall: $isCallMode")
+                isCallMode
+            }
+            
+            // Set appropriate state based on the cause
+            if (isPhoneCall) {
+                android.util.Log.d("AudioRecorder", "✅ Audio focus lost due to PHONE CALL")
+                _recordingState.value = RecordingState.PAUSED_PHONE_CALL
+            } else {
+                android.util.Log.d("AudioRecorder", "⚠️ Audio focus lost due to OTHER APP - checking again in 500ms")
+                _recordingState.value = RecordingState.PAUSED_FOCUS_LOSS
+                
+                // Check again after a short delay in case phone state changes
+                recordingScope.launch {
+                    kotlinx.coroutines.delay(500)
+                    try {
+                        val delayedCallState = telephonyManager.callState != TelephonyManager.CALL_STATE_IDLE
+                        val delayedAudioMode = audioManager.mode
+                        val delayedCallMode = delayedAudioMode == AudioManager.MODE_IN_CALL || 
+                                            delayedAudioMode == AudioManager.MODE_IN_COMMUNICATION ||
+                                            delayedAudioMode == AudioManager.MODE_CALL_SCREENING
+                        
+                        if (delayedCallState || delayedCallMode) {
+                            android.util.Log.d("AudioRecorder", "🔄 Delayed check: Phone call detected, updating state")
+                            if (_recordingState.value == RecordingState.PAUSED_FOCUS_LOSS) {
+                                _recordingState.value = RecordingState.PAUSED_PHONE_CALL
+                            }
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("AudioRecorder", "Delayed phone state check failed: ${e.message}")
+                    }
+                }
+            }
         }
     }
     
     private fun handleAudioFocusGain() {
         android.util.Log.d("AudioRecorder", "Audio focus gained")
         
-        // Only resume if we were recording before focus loss and currently paused due to focus loss
-        if (wasRecordingBeforeFocusLoss && _recordingState.value == RecordingState.PAUSED_FOCUS_LOSS) {
+        // Only resume if we were recording before focus loss and currently paused due to focus loss or phone call
+        if (wasRecordingBeforeFocusLoss && (_recordingState.value == RecordingState.PAUSED_FOCUS_LOSS || _recordingState.value == RecordingState.PAUSED_PHONE_CALL)) {
             wasRecordingBeforeFocusLoss = false
             // Directly set the recording state instead of calling resumeRecording()
             _recordingState.value = RecordingState.RECORDING
