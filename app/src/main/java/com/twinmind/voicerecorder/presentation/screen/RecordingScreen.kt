@@ -76,6 +76,8 @@ fun RecordingScreen(
                         style = MaterialTheme.typography.headlineMedium,
                         color = when {
                             recordingState == RecordingState.RECORDING_SOURCE_CHANGING -> MaterialTheme.colorScheme.tertiary
+                            recordingState == RecordingState.SILENT_DETECTED -> MaterialTheme.colorScheme.error
+                            recordingState == RecordingState.STOPPED_LOW_STORAGE -> MaterialTheme.colorScheme.error
                             isRecording -> MaterialTheme.colorScheme.primary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         }
@@ -89,25 +91,29 @@ fun RecordingScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     
-                    if (isRecording || recordingState == RecordingState.RECORDING_SOURCE_CHANGING) {
+                    if (isRecording || recordingState == RecordingState.RECORDING_SOURCE_CHANGING || recordingState == RecordingState.SILENT_DETECTED) {
                         Spacer(modifier = Modifier.height(16.dp))
                         
                         LinearProgressIndicator(
                             modifier = Modifier.fillMaxWidth(),
                             color = when (recordingState) {
                                 RecordingState.RECORDING_SOURCE_CHANGING -> MaterialTheme.colorScheme.tertiary
+                                RecordingState.SILENT_DETECTED -> MaterialTheme.colorScheme.error
                                 else -> MaterialTheme.colorScheme.primary
                             }
                         )
                         
-                        // Microphone source indicator
-                        if (recordingState == RecordingState.RECORDING_SOURCE_CHANGING) {
+                        // Status indicator for microphone changes or audio warnings
+                        if (recordingState == RecordingState.RECORDING_SOURCE_CHANGING || recordingState == RecordingState.SILENT_DETECTED) {
                             Spacer(modifier = Modifier.height(12.dp))
                             
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                                    containerColor = when (recordingState) {
+                                        RecordingState.SILENT_DETECTED -> MaterialTheme.colorScheme.errorContainer
+                                        else -> MaterialTheme.colorScheme.tertiaryContainer
+                                    }
                                 )
                             ) {
                                 Row(
@@ -118,9 +124,16 @@ fun RecordingScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "🎤 Microphone source changing...",
+                                        text = when (recordingState) {
+                                            RecordingState.RECORDING_SOURCE_CHANGING -> "🎤 Microphone source changing..."
+                                            RecordingState.SILENT_DETECTED -> "⚠️ No audio detected - Check microphone"
+                                            else -> ""
+                                        },
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                        color = when (recordingState) {
+                                            RecordingState.SILENT_DETECTED -> MaterialTheme.colorScheme.onErrorContainer
+                                            else -> MaterialTheme.colorScheme.onTertiaryContainer
+                                        }
                                     )
                                 }
                             }
@@ -135,12 +148,12 @@ fun RecordingScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 
-                if (isRecording && (recordingState == RecordingState.RECORDING || recordingState == RecordingState.RECORDING_SOURCE_CHANGING)) {
+                if (isRecording && (recordingState == RecordingState.RECORDING || recordingState == RecordingState.RECORDING_SOURCE_CHANGING || recordingState == RecordingState.SILENT_DETECTED)) {
                     // Pause Button (disabled during source change)
                     OutlinedButton(
                         onClick = { viewModel.pauseRecording() },
                         modifier = Modifier.size(width = 120.dp, height = 56.dp),
-                        enabled = recordingState == RecordingState.RECORDING
+                        enabled = recordingState == RecordingState.RECORDING || recordingState == RecordingState.SILENT_DETECTED
                     ) {
                         Text("PAUSE")
                     }
@@ -166,7 +179,7 @@ fun RecordingScreen(
                 // Main Record/Stop Button
                 Button(
                     onClick = {
-                        if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL || recordingState == RecordingState.RECORDING_SOURCE_CHANGING) {
+                        if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL || recordingState == RecordingState.RECORDING_SOURCE_CHANGING || recordingState == RecordingState.SILENT_DETECTED || recordingState == RecordingState.STOPPED_LOW_STORAGE) {
                             viewModel.stopRecording()
                         } else {
                             onStartRecording()
@@ -174,14 +187,14 @@ fun RecordingScreen(
                     },
                     modifier = Modifier.size(width = 140.dp, height = 56.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL || recordingState == RecordingState.RECORDING_SOURCE_CHANGING) 
+                        containerColor = if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL || recordingState == RecordingState.RECORDING_SOURCE_CHANGING || recordingState == RecordingState.SILENT_DETECTED || recordingState == RecordingState.STOPPED_LOW_STORAGE) 
                             MaterialTheme.colorScheme.error 
                         else 
                             MaterialTheme.colorScheme.primary
                     )
                 ) {
                     Text(
-                        text = if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL || recordingState == RecordingState.RECORDING_SOURCE_CHANGING) "STOP" else "START",
+                        text = if (isRecording || recordingState == RecordingState.PAUSED || recordingState == RecordingState.PAUSED_FOCUS_LOSS || recordingState == RecordingState.PAUSED_PHONE_CALL || recordingState == RecordingState.RECORDING_SOURCE_CHANGING || recordingState == RecordingState.SILENT_DETECTED || recordingState == RecordingState.STOPPED_LOW_STORAGE) "STOP" else "START",
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -193,6 +206,8 @@ fun RecordingScreen(
             Text(
                 text = when {
                     recordingState == RecordingState.RECORDING_SOURCE_CHANGING -> "Microphone source is changing. Recording continues seamlessly in the background."
+                    recordingState == RecordingState.SILENT_DETECTED -> "⚠️ No audio detected - Check microphone. Recording continues."
+                    recordingState == RecordingState.STOPPED_LOW_STORAGE -> "Recording stopped - Low storage space available."
                     recordingState == RecordingState.PAUSED -> "Recording paused. Tap RESUME to continue or STOP to finish."
                     recordingState == RecordingState.PAUSED_FOCUS_LOSS -> "Recording paused due to audio focus loss (music, other apps). Tap RESUME to continue or STOP to finish."
                     recordingState == RecordingState.PAUSED_PHONE_CALL -> "Recording paused due to phone call. Tap RESUME after call ends or STOP to finish."

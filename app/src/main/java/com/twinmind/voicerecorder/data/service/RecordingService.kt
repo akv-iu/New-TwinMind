@@ -73,6 +73,14 @@ class RecordingService : Service() {
         }
     }
     
+    private val silentAudioReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "com.twinmind.voicerecorder.SILENT_AUDIO_DETECTED") {
+                handleSilentAudioDetected()
+            }
+        }
+    }
+    
     inner class RecordingBinder : Binder() {
         fun getService(): RecordingService = this@RecordingService
     }
@@ -96,12 +104,16 @@ class RecordingService : Service() {
         createNotificationChannel()
         observeRecordingState()
         
-        // Register microphone source change receiver
-        val filter = IntentFilter("com.twinmind.voicerecorder.MICROPHONE_SOURCE_CHANGED")
+        // Register broadcast receivers
+        val micFilter = IntentFilter("com.twinmind.voicerecorder.MICROPHONE_SOURCE_CHANGED")
+        val silentFilter = IntentFilter("com.twinmind.voicerecorder.SILENT_AUDIO_DETECTED")
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(microphoneSourceReceiver, filter, RECEIVER_NOT_EXPORTED)
+            registerReceiver(microphoneSourceReceiver, micFilter, RECEIVER_NOT_EXPORTED)
+            registerReceiver(silentAudioReceiver, silentFilter, RECEIVER_NOT_EXPORTED)
         } else {
-            registerReceiver(microphoneSourceReceiver, filter)
+            registerReceiver(microphoneSourceReceiver, micFilter)
+            registerReceiver(silentAudioReceiver, silentFilter)
         }
     }
     
@@ -221,10 +233,24 @@ class RecordingService : Service() {
                         // Pause timer for phone call
                         timerJob?.cancel()
                     }
+                    RecordingState.RECORDING_SOURCE_CHANGING -> {
+                        updateNotification("Microphone source changing...")
+                        // Keep timer running during source change
+                    }
+                    RecordingState.SILENT_DETECTED -> {
+                        updateSilentAudioNotification()
+                        // Keep timer running during silent detection
+                    }
                     RecordingState.STOPPED -> {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         // Keep service alive for next recording
                         // The AudioRecorderImpl will reset to IDLE automatically
+                    }
+                    RecordingState.STOPPED_LOW_STORAGE -> {
+                        updateNotification("Recording stopped - Low storage")
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        // Reset to IDLE 
+                        _recordingState.value = RecordingState.IDLE
                     }
                     RecordingState.ERROR -> {
                         updateNotification("Error occurred")
@@ -392,6 +418,11 @@ class RecordingService : Service() {
         }
     }
     
+    private fun handleSilentAudioDetected() {
+        // Update notification to show silent audio warning
+        updateSilentAudioNotification()
+    }
+    
     private fun updateMicrophoneSourceNotification(status: String, previousSource: String, newSource: String) {
         val mainActivityIntent = Intent(this, com.twinmind.voicerecorder.MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
@@ -430,13 +461,43 @@ class RecordingService : Service() {
         stopTimer()
         audioRecorder.release()
         
-        // Unregister microphone source change receiver
+        // Unregister broadcast receivers
         try {
             unregisterReceiver(microphoneSourceReceiver)
+            unregisterReceiver(silentAudioReceiver)
         } catch (e: Exception) {
-            // Receiver may not be registered
+            // Receivers may not be registered
         }
         
         serviceScope.cancel()
+    }
+    
+    private fun updateSilentAudioNotification() {
+        val mainActivityIntent = Intent(this, com.twinmind.voicerecorder.MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, mainActivityIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val stopIntent = Intent(this, RecordingService::class.java).apply {
+            action = ACTION_STOP_RECORDING
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 0, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Recording - Audio Warning")
+            .setContentText("⚠️ No audio detected - Check microphone")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(R.drawable.ic_launcher_foreground, "Stop", stopPendingIntent)
+            .setColor(resources.getColor(android.R.color.holo_red_light, theme))
+            .build()
+        
+        notificationManager?.notify(NOTIFICATION_ID, notification)
     }
 }

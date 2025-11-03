@@ -61,6 +61,18 @@ class AudioRecorderImpl @Inject constructor(
     private var totalSwitchTime = 0L
     private var isSourceChanging = false
     
+    // Silent Audio Detection
+    private var lastAudioTime = 0L
+    private var silenceStartTime = 0L
+    private var isSilentWarningShown = false
+    private val silenceThresholdMs = 10_000L // 10 seconds
+    private val audioLevelThreshold = 500 // Minimum audio level to consider as "sound"
+    
+    // Storage Management
+    private val minStorageBytes = 50 * 1024 * 1024L // 50MB minimum storage
+    private var lastStorageCheck = 0L
+    private val storageCheckIntervalMs = 30_000L // Check every 30 seconds
+    
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         android.util.Log.d("AudioRecorder", "Audio focus changed: $focusChange")
         when (focusChange) {
@@ -127,6 +139,11 @@ class AudioRecorderImpl @Inject constructor(
                 return Result.failure(IllegalStateException("Recording already in progress"))
             }
             
+            // Check storage before starting recording
+            if (!hasEnoughStorage()) {
+                return Result.failure(IllegalStateException("Insufficient storage space"))
+            }
+            
             // Request audio focus before starting recording
             if (!requestAudioFocus()) {
                 return Result.failure(IllegalStateException("Could not obtain audio focus"))
@@ -175,6 +192,13 @@ class AudioRecorderImpl @Inject constructor(
             }
             
             _recordingState.value = RecordingState.RECORDING
+            
+            // Initialize monitoring variables
+            val currentTime = System.currentTimeMillis()
+            lastAudioTime = currentTime
+            silenceStartTime = 0L
+            isSilentWarningShown = false
+            lastStorageCheck = currentTime
             
             recordingJob = recordingScope.launch {
                 recordInChunks()
@@ -307,10 +331,25 @@ class AudioRecorderImpl @Inject constructor(
             }
             
             // Only read data when actually recording (not paused)
-            if (_recordingState.value == RecordingState.RECORDING) {
+            if (_recordingState.value == RecordingState.RECORDING || 
+                _recordingState.value == RecordingState.RECORDING_SOURCE_CHANGING ||
+                _recordingState.value == RecordingState.SILENT_DETECTED) {
                 val bytesRead = audioRecord.read(buffer, 0, buffer.size)
                 if (bytesRead > 0) {
                     chunkData.addAll(buffer.take(bytesRead))
+                    
+                    // Monitor audio levels for silence detection
+                    val audioLevel = calculateAudioLevel(buffer, bytesRead)
+                    checkForSilentAudio(audioLevel, currentTime)
+                    
+                    // Check storage periodically
+                    if (currentTime - lastStorageCheck > storageCheckIntervalMs) {
+                        if (!hasEnoughStorage()) {
+                            _recordingState.value = RecordingState.STOPPED_LOW_STORAGE
+                            break
+                        }
+                        lastStorageCheck = currentTime
+                    }
                     
                     // Calculate actual recording time (excluding pauses)
                     val actualRecordingTime = currentTime - recordingStartTime - totalPausedTime
@@ -591,6 +630,84 @@ class AudioRecorderImpl @Inject constructor(
             context.sendBroadcast(intent)
         } catch (e: Exception) {
             android.util.Log.w(TAG, "Failed to send microphone source change broadcast", e)
+        }
+    }
+    
+    private fun calculateAudioLevel(buffer: ByteArray, bytesRead: Int): Int {
+        var sum = 0.0
+        var sampleCount = 0
+        
+        // Convert bytes to 16-bit samples and calculate RMS
+        for (i in 0 until bytesRead - 1 step 2) {
+            val sample = (buffer[i].toInt() and 0xFF) or ((buffer[i + 1].toInt() and 0xFF) shl 8)
+            val signedSample = if (sample > 32767) sample - 65536 else sample
+            sum += signedSample * signedSample
+            sampleCount++
+        }
+        
+        return if (sampleCount > 0) {
+            kotlin.math.sqrt(sum / sampleCount).toInt()
+        } else {
+            0
+        }
+    }
+    
+    private fun checkForSilentAudio(audioLevel: Int, currentTime: Long) {
+        if (audioLevel > audioLevelThreshold) {
+            // Audio detected - reset silence tracking
+            lastAudioTime = currentTime
+            if (_recordingState.value == RecordingState.SILENT_DETECTED) {
+                // Resume from silent state
+                _recordingState.value = RecordingState.RECORDING
+                isSilentWarningShown = false
+                android.util.Log.d(TAG, "Audio detected - resuming from silent state")
+            }
+            silenceStartTime = 0L
+        } else {
+            // No significant audio detected
+            if (silenceStartTime == 0L) {
+                silenceStartTime = currentTime
+            }
+            
+            val silenceDuration = currentTime - silenceStartTime
+            if (silenceDuration >= silenceThresholdMs && !isSilentWarningShown) {
+                // 10 seconds of silence detected
+                _recordingState.value = RecordingState.SILENT_DETECTED
+                isSilentWarningShown = true
+                android.util.Log.d(TAG, "Silent audio detected after ${silenceDuration}ms")
+                
+                // Notify service about silent audio
+                notifySilentAudioDetected()
+            }
+        }
+    }
+    
+    private fun hasEnoughStorage(): Boolean {
+        return try {
+            val storageDir = context.getExternalFilesDir(null) ?: context.filesDir
+            val availableBytes = storageDir.freeSpace
+            val hasEnough = availableBytes >= minStorageBytes
+            
+            if (!hasEnough) {
+                android.util.Log.w(TAG, "Low storage detected: ${availableBytes / (1024 * 1024)}MB available, ${minStorageBytes / (1024 * 1024)}MB required")
+            }
+            
+            hasEnough
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Failed to check storage", e)
+            true // Assume we have storage if check fails
+        }
+    }
+    
+    private fun notifySilentAudioDetected() {
+        // Send broadcast to service to show silent audio notification
+        try {
+            val intent = Intent("com.twinmind.voicerecorder.SILENT_AUDIO_DETECTED").apply {
+                setPackage(context.packageName)
+            }
+            context.sendBroadcast(intent)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Failed to send silent audio broadcast", e)
         }
     }
 }
