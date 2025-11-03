@@ -5,7 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -56,6 +59,20 @@ class RecordingService : Service() {
     private var startTime = 0L
     private var timerJob: Job? = null
     
+    // Microphone source tracking
+    private var currentMicrophoneSource: String = "Built-in Microphone"
+    
+    // Broadcast receiver for microphone source changes
+    private val microphoneSourceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "com.twinmind.voicerecorder.MICROPHONE_SOURCE_CHANGED") {
+                val previousSource = intent.getStringExtra("previousSource") ?: "Unknown"
+                val newSource = intent.getStringExtra("newSource") ?: "Unknown"
+                handleMicrophoneSourceChange(previousSource, newSource)
+            }
+        }
+    }
+    
     inner class RecordingBinder : Binder() {
         fun getService(): RecordingService = this@RecordingService
     }
@@ -78,6 +95,14 @@ class RecordingService : Service() {
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannel()
         observeRecordingState()
+        
+        // Register microphone source change receiver
+        val filter = IntentFilter("com.twinmind.voicerecorder.MICROPHONE_SOURCE_CHANGED")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(microphoneSourceReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(microphoneSourceReceiver, filter)
+        }
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -306,6 +331,12 @@ class RecordingService : Service() {
     }
     
     private fun createRecordingNotification(status: String): Notification {
+        val mainActivityIntent = Intent(this, com.twinmind.voicerecorder.MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, mainActivityIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
         val stopIntent = Intent(this, RecordingService::class.java).apply {
             action = ACTION_STOP_RECORDING
         }
@@ -314,9 +345,17 @@ class RecordingService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
+        // Add microphone source info for recording states
+        val displayText = if (status.contains("Recording") && currentMicrophoneSource != "Built-in Microphone") {
+            "$status with $currentMicrophoneSource"
+        } else {
+            status
+        }
+        
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Voice Recording")
-            .setContentText(status)
+            .setContentTitle("Voice Recorder")
+            .setContentText(displayText)
+            .setContentIntent(pendingIntent)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .addAction(
@@ -332,10 +371,72 @@ class RecordingService : Service() {
         notificationManager?.notify(NOTIFICATION_ID, notification)
     }
     
+    private fun handleMicrophoneSourceChange(previousSource: String, newSource: String) {
+        currentMicrophoneSource = newSource
+        
+        // Update notification to show microphone source change
+        val status = when (_recordingState.value) {
+            RecordingState.RECORDING -> "Recording with $newSource"
+            RecordingState.RECORDING_SOURCE_CHANGING -> "Switching to $newSource..."
+            else -> "Recording with $newSource"
+        }
+        
+        updateMicrophoneSourceNotification(status, previousSource, newSource)
+        
+        // Briefly show source change notification, then return to normal recording notification
+        serviceScope.launch {
+            delay(3000) // Show source change for 3 seconds
+            if (_recordingState.value == RecordingState.RECORDING) {
+                updateNotification("Recording with $newSource")
+            }
+        }
+    }
+    
+    private fun updateMicrophoneSourceNotification(status: String, previousSource: String, newSource: String) {
+        val mainActivityIntent = Intent(this, com.twinmind.voicerecorder.MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, mainActivityIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val stopIntent = Intent(this, RecordingService::class.java).apply {
+            action = ACTION_STOP_RECORDING
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 0, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Voice Recorder")
+            .setContentText(status)
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("$status\n\nMicrophone switched from $previousSource to $newSource"))
+            .setContentIntent(pendingIntent)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .addAction(
+                R.drawable.ic_launcher_foreground,
+                "Stop",
+                stopPendingIntent
+            )
+            .build()
+            
+        notificationManager?.notify(NOTIFICATION_ID, notification)
+    }
+    
     override fun onDestroy() {
         super.onDestroy()
         stopTimer()
         audioRecorder.release()
+        
+        // Unregister microphone source change receiver
+        try {
+            unregisterReceiver(microphoneSourceReceiver)
+        } catch (e: Exception) {
+            // Receiver may not be registered
+        }
+        
         serviceScope.cancel()
     }
 }

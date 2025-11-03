@@ -1,7 +1,10 @@
 package com.twinmind.voicerecorder.data.repository
 
 import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -9,6 +12,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.telephony.TelephonyManager
+import android.util.Log
 import com.twinmind.voicerecorder.domain.model.AudioChunk
 import com.twinmind.voicerecorder.domain.model.RecordingState
 import com.twinmind.voicerecorder.domain.repository.AudioChunkRepository
@@ -51,6 +55,12 @@ class AudioRecorderImpl @Inject constructor(
     private var audioFocusRequest: AudioFocusRequest? = null
     private var wasRecordingBeforeFocusLoss = false
     
+    // Microphone Source Management
+    private var currentMicrophoneSource: String = "Built-in Microphone"
+    private var sourceSwitchStartTime = 0L
+    private var totalSwitchTime = 0L
+    private var isSourceChanging = false
+    
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         android.util.Log.d("AudioRecorder", "Audio focus changed: $focusChange")
         when (focusChange) {
@@ -73,7 +83,37 @@ class AudioRecorderImpl @Inject constructor(
         }
     }
     
+    private val audioDeviceCallback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<AudioDeviceInfo>) {
+                Log.d(TAG, "Audio devices added: ${addedDevices.map { getDeviceName(it) }}")
+                handleAudioDeviceChange()
+            }
+            
+            override fun onAudioDevicesRemoved(removedDevices: Array<AudioDeviceInfo>) {
+                Log.d(TAG, "Audio devices removed: ${removedDevices.map { getDeviceName(it) }}")
+                handleAudioDeviceChange()
+            }
+        }
+    } else null
+    
+    private fun getDeviceName(device: AudioDeviceInfo): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            when (device.type) {
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth SCO"
+                AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Wired Headset"
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired Headphones"
+                AudioDeviceInfo.TYPE_USB_HEADSET -> "USB Headset"
+                AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Built-in Microphone"
+                else -> "Unknown Device (${device.type})"
+            }
+        } else {
+            "Unknown Device"
+        }
+    }
+    
     companion object {
+        private const val TAG = "AudioRecorderImpl"
         private const val SAMPLE_RATE = 44100
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
@@ -91,6 +131,17 @@ class AudioRecorderImpl @Inject constructor(
             if (!requestAudioFocus()) {
                 return Result.failure(IllegalStateException("Could not obtain audio focus"))
             }
+            
+            // Register device callback for microphone source monitoring
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audioDeviceCallback?.let { callback ->
+                    audioManager.registerAudioDeviceCallback(callback, null)
+                }
+            }
+            
+            // Initialize microphone source
+            currentMicrophoneSource = getCurrentMicrophoneSource()
+            android.util.Log.d("AudioRecorder", "Starting recording with microphone: $currentMicrophoneSource")
             
             currentSessionId = sessionId
             chunkSequenceNumber = 0
@@ -147,6 +198,15 @@ class AudioRecorderImpl @Inject constructor(
             // Abandon audio focus
             abandonAudioFocus()
             wasRecordingBeforeFocusLoss = false
+            
+            // Unregister audio device callback
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                try {
+                    audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to unregister audio device callback", e)
+                }
+            }
             
             recordingJob?.cancel()
             audioRecord?.apply {
@@ -448,6 +508,89 @@ class AudioRecorderImpl @Inject constructor(
             wasRecordingBeforeFocusLoss = false
             // Directly set the recording state instead of calling resumeRecording()
             _recordingState.value = RecordingState.RECORDING
+        }
+    }
+    
+    private fun handleAudioDeviceChange() {
+        // Only handle device changes during recording
+        if (_recordingState.value != RecordingState.RECORDING && 
+            _recordingState.value != RecordingState.RECORDING_SOURCE_CHANGING) {
+            return
+        }
+        
+        val newMicrophoneSource = getCurrentMicrophoneSource()
+        
+        // If microphone source changed, handle the transition
+        if (newMicrophoneSource != currentMicrophoneSource) {
+            android.util.Log.d(TAG, "Microphone source changed from $currentMicrophoneSource to $newMicrophoneSource")
+            
+            val previousSource = currentMicrophoneSource
+            currentMicrophoneSource = newMicrophoneSource
+            
+            // Briefly change state to indicate source switching
+            if (_recordingState.value == RecordingState.RECORDING) {
+                _recordingState.value = RecordingState.RECORDING_SOURCE_CHANGING
+                sourceSwitchStartTime = System.currentTimeMillis()
+                
+                // Switch back to recording after a brief moment to show the change
+                recordingScope.launch {
+                    delay(1000) // 1 second indicator
+                    if (_recordingState.value == RecordingState.RECORDING_SOURCE_CHANGING) {
+                        _recordingState.value = RecordingState.RECORDING
+                    }
+                }
+            }
+            
+            // Notify service about microphone source change
+            notifyMicrophoneSourceChange(previousSource, newMicrophoneSource)
+        }
+    }
+    
+    private fun getCurrentMicrophoneSource(): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            
+            // Priority order: Bluetooth -> Wired -> Built-in
+            devices.forEach { device ->
+                when (device.type) {
+                    AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> return "Bluetooth Headset"
+                    AudioDeviceInfo.TYPE_WIRED_HEADSET -> return "Wired Headset" 
+                    AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> return "Wired Headphones"
+                    AudioDeviceInfo.TYPE_USB_HEADSET -> return "USB Headset"
+                }
+            }
+            
+            // Check for built-in microphone
+            devices.forEach { device ->
+                when (device.type) {
+                    AudioDeviceInfo.TYPE_BUILTIN_MIC -> return "Built-in Microphone"
+                }
+            }
+            
+            "Unknown Microphone"
+        } else {
+            // Fallback for older Android versions
+            if (audioManager.isBluetoothScoOn) {
+                "Bluetooth Headset"
+            } else if (audioManager.isWiredHeadsetOn) {
+                "Wired Headset"
+            } else {
+                "Built-in Microphone"
+            }
+        }
+    }
+    
+    private fun notifyMicrophoneSourceChange(previousSource: String, newSource: String) {
+        // Send broadcast to service to update notification
+        try {
+            val intent = Intent("com.twinmind.voicerecorder.MICROPHONE_SOURCE_CHANGED").apply {
+                putExtra("previousSource", previousSource)
+                putExtra("newSource", newSource)
+                setPackage(context.packageName)
+            }
+            context.sendBroadcast(intent)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Failed to send microphone source change broadcast", e)
         }
     }
 }
