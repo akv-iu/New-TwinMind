@@ -176,9 +176,20 @@ class RecordingService : Service() {
                 when (state) {
                     RecordingState.RECORDING -> {
                         updateNotification("Recording...")
+                        // Ensure timer is running
+                        if (timerJob?.isActive != true) {
+                            startTimer()
+                        }
                     }
                     RecordingState.PAUSED -> {
                         updateNotification("Paused")
+                        // Pause timer for manual pause
+                        timerJob?.cancel()
+                    }
+                    RecordingState.PAUSED_FOCUS_LOSS -> {
+                        updateAudioFocusLostNotification()
+                        // Pause timer for audio focus loss
+                        timerJob?.cancel()
                     }
                     RecordingState.STOPPED -> {
                         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -209,6 +220,45 @@ class RecordingService : Service() {
             }
             notificationManager?.createNotificationChannel(channel)
         }
+    }
+    
+    private fun updateAudioFocusLostNotification() {
+        val resumeIntent = Intent(this, RecordingService::class.java).apply {
+            action = ACTION_RESUME_RECORDING
+        }
+        val resumePendingIntent = PendingIntent.getService(
+            this, 1, resumeIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val stopIntent = Intent(this, RecordingService::class.java).apply {
+            action = ACTION_STOP_RECORDING
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 2, stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Voice Recording")
+            .setContentText("Paused – Audio focus lost")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .addAction(
+                R.drawable.ic_launcher_foreground,
+                "Resume",
+                resumePendingIntent
+            )
+            .addAction(
+                R.drawable.ic_launcher_foreground,
+                "Stop",
+                stopPendingIntent
+            )
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("Recording paused due to audio focus loss. Tap Resume to continue or Stop to end recording."))
+            .build()
+        
+        notificationManager?.notify(NOTIFICATION_ID, notification)
     }
     
     private fun createRecordingNotification(status: String): Notification {

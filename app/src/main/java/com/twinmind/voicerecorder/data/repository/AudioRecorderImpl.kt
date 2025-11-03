@@ -1,13 +1,19 @@
 package com.twinmind.voicerecorder.data.repository
 
+import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import com.twinmind.voicerecorder.domain.model.AudioChunk
 import com.twinmind.voicerecorder.domain.model.RecordingState
 import com.twinmind.voicerecorder.domain.repository.AudioChunkRepository
 import com.twinmind.voicerecorder.domain.repository.AudioRecorder
 import com.twinmind.voicerecorder.domain.repository.AudioStorage
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,7 +30,8 @@ import javax.inject.Singleton
 @Singleton
 class AudioRecorderImpl @Inject constructor(
     private val audioStorage: AudioStorage,
-    private val chunkRepository: AudioChunkRepository
+    private val chunkRepository: AudioChunkRepository,
+    @ApplicationContext private val context: Context
 ) : AudioRecorder {
     
     private val recordingScope = CoroutineScope(Dispatchers.IO + Job())
@@ -36,6 +43,33 @@ class AudioRecorderImpl @Inject constructor(
     private var recordingJob: Job? = null
     private var currentSessionId: String? = null
     private var chunkSequenceNumber = 0
+    
+    // Audio Focus Management
+    private val audioManager: AudioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private var wasRecordingBeforeFocusLoss = false
+    
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        android.util.Log.d("AudioRecorder", "Audio focus changed: $focusChange")
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                // Permanent loss - pause recording
+                handleAudioFocusLoss(permanent = true)
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                // Temporary loss - pause recording
+                handleAudioFocusLoss(permanent = false)
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                // Can duck, but for recording we should pause
+                handleAudioFocusLoss(permanent = false)
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                // Regained focus - resume if was recording
+                handleAudioFocusGain()
+            }
+        }
+    }
     
     companion object {
         private const val SAMPLE_RATE = 44100
@@ -49,6 +83,11 @@ class AudioRecorderImpl @Inject constructor(
         return try {
             if (_recordingState.value != RecordingState.IDLE) {
                 return Result.failure(IllegalStateException("Recording already in progress"))
+            }
+            
+            // Request audio focus before starting recording
+            if (!requestAudioFocus()) {
+                return Result.failure(IllegalStateException("Could not obtain audio focus"))
             }
             
             currentSessionId = sessionId
@@ -102,6 +141,10 @@ class AudioRecorderImpl @Inject constructor(
         return try {
             // Set state to STOPPED so the recording loop exits and saves remaining data
             _recordingState.value = RecordingState.STOPPED
+            
+            // Abandon audio focus
+            abandonAudioFocus()
+            wasRecordingBeforeFocusLoss = false
             
             recordingJob?.cancel()
             audioRecord?.apply {
@@ -184,8 +227,8 @@ class AudioRecorderImpl @Inject constructor(
             val audioRecord = this.audioRecord ?: break
             val currentTime = System.currentTimeMillis()
             
-            // Track paused time
-            if (_recordingState.value == RecordingState.PAUSED) {
+            // Track paused time (includes both manual pause and audio focus loss)
+            if (_recordingState.value == RecordingState.PAUSED || _recordingState.value == RecordingState.PAUSED_FOCUS_LOSS) {
                 if (pauseStartTime == 0L) {
                     pauseStartTime = currentTime
                 }
@@ -217,6 +260,8 @@ class AudioRecorderImpl @Inject constructor(
                         recordingStartTime = currentTime  // Reset start time for next chunk
                         totalPausedTime = 0L  // Reset paused time for next chunk
                         chunkSequenceNumber++
+                    } else {
+                        android.util.Log.v("AudioRecorder", "Recording progress - ActualTime: ${actualRecordingTime}ms, ChunkSize: ${chunkData.size}, Sequence: $chunkSequenceNumber")
                     }
                 }
             }
@@ -230,11 +275,11 @@ class AudioRecorderImpl @Inject constructor(
             val currentTime = System.currentTimeMillis()
             // Calculate final chunk duration
             val finalChunkDuration = currentTime - recordingStartTime - totalPausedTime
-            android.util.Log.d("AudioRecorder", "Saving final chunk - Size: ${chunkData.size}, Duration: ${finalChunkDuration}ms")
+            android.util.Log.d("AudioRecorder", "Saving final chunk - Size: ${chunkData.size}, Duration: ${finalChunkDuration}ms, Sequence: $chunkSequenceNumber")
             saveChunk(sessionId, chunkData.toByteArray(), lastChunkTime, finalChunkDuration)
-            android.util.Log.d("AudioRecorder", "Final chunk saved successfully")
+            android.util.Log.d("AudioRecorder", "Final chunk saved successfully - Total chunks created: ${chunkSequenceNumber + 1}")
         } else {
-            android.util.Log.d("AudioRecorder", "No remaining data to save")
+            android.util.Log.w("AudioRecorder", "No remaining data to save - Total chunks created: $chunkSequenceNumber")
         }
         
         android.util.Log.d("AudioRecorder", "recordInChunks loop exited for session: $sessionId")
@@ -279,6 +324,68 @@ class AudioRecorderImpl @Inject constructor(
         }.onFailure { error ->
             android.util.Log.e("AudioRecorder", "Failed to save chunk", error)
             _recordingState.value = RecordingState.ERROR
+        }
+    }
+    
+    private fun requestAudioFocus(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Android 8.0+ (API 26) - Use AudioFocusRequest
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+                
+            audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(audioAttributes)
+                .setAcceptsDelayedFocusGain(false)
+                .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                .build()
+                
+            val result = audioManager.requestAudioFocus(audioFocusRequest!!)
+            result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        } else {
+            // Below Android 8.0 - Use deprecated method
+            @Suppress("DEPRECATION")
+            val result = audioManager.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN
+            )
+            result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        }
+    }
+    
+    private fun abandonAudioFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { request ->
+                audioManager.abandonAudioFocusRequest(request)
+                audioFocusRequest = null
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(audioFocusChangeListener)
+        }
+    }
+    
+    private fun handleAudioFocusLoss(permanent: Boolean) {
+        android.util.Log.d("AudioRecorder", "Audio focus lost (permanent: $permanent)")
+        
+        // Only pause if currently recording
+        if (_recordingState.value == RecordingState.RECORDING) {
+            wasRecordingBeforeFocusLoss = true
+            // Directly set the focus loss state instead of calling pauseRecording()
+            _recordingState.value = RecordingState.PAUSED_FOCUS_LOSS
+        }
+    }
+    
+    private fun handleAudioFocusGain() {
+        android.util.Log.d("AudioRecorder", "Audio focus gained")
+        
+        // Only resume if we were recording before focus loss and currently paused due to focus loss
+        if (wasRecordingBeforeFocusLoss && _recordingState.value == RecordingState.PAUSED_FOCUS_LOSS) {
+            wasRecordingBeforeFocusLoss = false
+            // Directly set the recording state instead of calling resumeRecording()
+            _recordingState.value = RecordingState.RECORDING
         }
     }
 }
