@@ -73,7 +73,8 @@ class AudioChunkRepositoryImpl @Inject constructor(
             sequenceNumber = sequenceNumber,
             startTimeMs = startTimeMs,
             durationMs = durationMs,
-            sizeBytes = sizeBytes
+            sizeBytes = sizeBytes,
+            createdAt = createdAt
         )
     }
 }

@@ -34,7 +34,9 @@ abstract class VoiceRecorderDatabase : RoomDatabase() {
                     context.applicationContext,
                     VoiceRecorderDatabase::class.java,
                     "voice_recorder_database"
-                ).build()
+                )
+                .fallbackToDestructiveMigration() // Use destructive migration during development
+                .build()
                 INSTANCE = instance
                 instance
             }

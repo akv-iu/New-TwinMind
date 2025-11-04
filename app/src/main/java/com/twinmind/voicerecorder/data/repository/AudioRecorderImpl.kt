@@ -49,6 +49,9 @@ class AudioRecorderImpl @Inject constructor(
     private var currentSessionId: String? = null
     private var chunkSequenceNumber = 0
     
+    // Overlap buffer to preserve speech continuity between chunks
+    private var overlapBuffer = mutableListOf<Byte>()
+    
     // Audio Focus Management
     private val audioManager: AudioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val telephonyManager: TelephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
@@ -130,6 +133,7 @@ class AudioRecorderImpl @Inject constructor(
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         private const val CHUNK_DURATION_MS = 30_000L // 30 seconds
+        private const val OVERLAP_DURATION_MS = 2_000L // 2 seconds
         private const val BUFFER_SIZE_MULTIPLIER = 2
     }
     
@@ -162,6 +166,7 @@ class AudioRecorderImpl @Inject constructor(
             
             currentSessionId = sessionId
             chunkSequenceNumber = 0
+            overlapBuffer.clear() // Clear overlap buffer for new session
             
             val bufferSize = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE,
@@ -241,6 +246,7 @@ class AudioRecorderImpl @Inject constructor(
             }
             audioRecord = null
             currentSessionId = null
+            overlapBuffer.clear() // Clear overlap buffer when stopping
             
             // Reset to IDLE after a brief moment so the recorder can be reused
             recordingScope.launch {
@@ -357,7 +363,35 @@ class AudioRecorderImpl @Inject constructor(
                     // Check if we've reached 30 seconds of actual recording time
                     if (actualRecordingTime >= CHUNK_DURATION_MS) {
                         android.util.Log.d("AudioRecorder", "Saving 30-second chunk - Sequence: $chunkSequenceNumber, Size: ${chunkData.size}, ActualTime: ${actualRecordingTime}ms")
-                        saveChunk(sessionId, chunkData.toByteArray(), lastChunkTime, CHUNK_DURATION_MS)
+                        
+                        // Calculate overlap buffer size (2 seconds of audio data)
+                        val bytesPerSecond = SAMPLE_RATE * 2 // 16-bit = 2 bytes per sample, mono
+                        val overlapBufferSize = (OVERLAP_DURATION_MS * bytesPerSecond / 1000).toInt()
+                        
+                        // Save the chunk with overlap from previous chunk
+                        val chunkWithOverlap = if (overlapBuffer.isNotEmpty()) {
+                            overlapBuffer + chunkData
+                        } else {
+                            chunkData.toList()
+                        }
+                        val hasOverlap = overlapBuffer.isNotEmpty()
+                        val overlapDuration = if (hasOverlap) OVERLAP_DURATION_MS else 0L
+                        saveChunk(
+                            sessionId = sessionId, 
+                            audioData = chunkWithOverlap.toByteArray(), 
+                            startTime = lastChunkTime, 
+                            durationMs = CHUNK_DURATION_MS,
+                            hasOverlap = hasOverlap,
+                            overlapDurationMs = overlapDuration
+                        )
+                        
+                        // Extract last 2 seconds for next chunk's overlap
+                        overlapBuffer.clear()
+                        if (chunkData.size >= overlapBufferSize) {
+                            val startIndex = chunkData.size - overlapBufferSize
+                            overlapBuffer.addAll(chunkData.subList(startIndex, chunkData.size))
+                        }
+                        
                         chunkData.clear()
                         lastChunkTime = currentTime
                         recordingStartTime = currentTime  // Reset start time for next chunk
@@ -379,7 +413,22 @@ class AudioRecorderImpl @Inject constructor(
             // Calculate final chunk duration
             val finalChunkDuration = currentTime - recordingStartTime - totalPausedTime
             android.util.Log.d("AudioRecorder", "Saving final chunk - Size: ${chunkData.size}, Duration: ${finalChunkDuration}ms, Sequence: $chunkSequenceNumber")
-            saveChunk(sessionId, chunkData.toByteArray(), lastChunkTime, finalChunkDuration)
+            // Final chunk may have overlap from previous chunk
+            val finalChunkWithOverlap = if (overlapBuffer.isNotEmpty()) {
+                overlapBuffer + chunkData
+            } else {
+                chunkData.toList()
+            }
+            val hasOverlap = overlapBuffer.isNotEmpty()
+            val overlapDuration = if (hasOverlap) OVERLAP_DURATION_MS else 0L
+            saveChunk(
+                sessionId = sessionId,
+                audioData = finalChunkWithOverlap.toByteArray(),
+                startTime = lastChunkTime,
+                durationMs = finalChunkDuration,
+                hasOverlap = hasOverlap,
+                overlapDurationMs = overlapDuration
+            )
             android.util.Log.d("AudioRecorder", "Final chunk saved successfully - Total chunks created: ${chunkSequenceNumber + 1}")
         } else {
             android.util.Log.w("AudioRecorder", "No remaining data to save - Total chunks created: $chunkSequenceNumber")
@@ -392,7 +441,9 @@ class AudioRecorderImpl @Inject constructor(
         sessionId: String,
         audioData: ByteArray,
         startTime: Long,
-        durationMs: Long
+        durationMs: Long,
+        hasOverlap: Boolean = false,
+        overlapDurationMs: Long = 0L
     ) {
         val chunk = AudioChunk(
             id = UUID.randomUUID().toString(),
@@ -401,7 +452,9 @@ class AudioRecorderImpl @Inject constructor(
             sequenceNumber = chunkSequenceNumber,
             startTimeMs = startTime,
             durationMs = durationMs,
-            sizeBytes = audioData.size.toLong()
+            sizeBytes = audioData.size.toLong(),
+            hasOverlap = hasOverlap,
+            overlapDurationMs = overlapDurationMs
         )
         
         android.util.Log.d("AudioRecorder", "Saving chunk for session: $sessionId, sequence: $chunkSequenceNumber, size: ${audioData.size}")

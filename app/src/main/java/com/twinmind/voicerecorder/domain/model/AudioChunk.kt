@@ -12,5 +12,7 @@ data class AudioChunk(
     val startTimeMs: Long,
     val durationMs: Long,
     val sizeBytes: Long,
+    val hasOverlap: Boolean = false,
+    val overlapDurationMs: Long = 0L,
     val createdAt: Long = System.currentTimeMillis()
 ) : Parcelable
