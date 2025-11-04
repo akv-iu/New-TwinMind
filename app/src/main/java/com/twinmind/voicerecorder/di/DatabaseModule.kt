@@ -24,7 +24,10 @@ object DatabaseModule {
             context.applicationContext,
             VoiceRecorderDatabase::class.java,
             "voice_recorder_database"
-        ).build()
+        )
+        .fallbackToDestructiveMigration()
+        .fallbackToDestructiveMigrationOnDowngrade()
+        .build()
     }
     
     @Provides
@@ -40,6 +43,11 @@ object DatabaseModule {
     @Provides
     fun provideTranscriptDao(database: VoiceRecorderDatabase): TranscriptDao {
         return database.transcriptDao()
+    }
+    
+    @Provides
+    fun provideTranscriptChunkDao(database: VoiceRecorderDatabase): TranscriptChunkDao {
+        return database.transcriptChunkDao()
     }
     
     @Provides

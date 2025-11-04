@@ -18,6 +18,7 @@ import com.twinmind.voicerecorder.domain.model.RecordingState
 import com.twinmind.voicerecorder.domain.repository.AudioChunkRepository
 import com.twinmind.voicerecorder.domain.repository.AudioRecorder
 import com.twinmind.voicerecorder.domain.repository.AudioStorage
+import com.twinmind.voicerecorder.domain.repository.TranscriptionRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,7 @@ import javax.inject.Singleton
 class AudioRecorderImpl @Inject constructor(
     private val audioStorage: AudioStorage,
     private val chunkRepository: AudioChunkRepository,
+    private val transcriptionRepository: TranscriptionRepository,
     @ApplicationContext private val context: Context
 ) : AudioRecorder {
     
@@ -469,6 +471,22 @@ class AudioRecorderImpl @Inject constructor(
                     chunkRepository.saveChunk(updatedChunk)
                 }
                 android.util.Log.d("AudioRecorder", "Chunk saved to database: ${updatedChunk.id}")
+                
+                // Trigger transcription for the saved chunk (fire-and-forget)
+                recordingScope.launch {
+                    try {
+                        android.util.Log.d("AudioRecorder", "🎤 Starting transcription for chunk: ${updatedChunk.id}")
+                        transcriptionRepository.transcribeAudioChunk(
+                            chunkId = updatedChunk.id,
+                            sessionId = updatedChunk.sessionId,
+                            chunkSequence = updatedChunk.sequenceNumber,
+                            audioFilePath = updatedChunk.filePath
+                        )
+                        android.util.Log.d("AudioRecorder", "✅ Transcription completed for chunk: ${updatedChunk.id}")
+                    } catch (e: Exception) {
+                        android.util.Log.e("AudioRecorder", "❌ Transcription failed for chunk: ${updatedChunk.id}", e)
+                    }
+                }
             } catch (e: Exception) {
                 android.util.Log.e("AudioRecorder", "Failed to save chunk to database", e)
             }

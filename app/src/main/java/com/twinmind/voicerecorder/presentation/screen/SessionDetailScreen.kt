@@ -26,6 +26,7 @@ import java.util.*
 fun SessionDetailScreen(
     sessionId: String,
     onNavigateBack: () -> Unit,
+    onNavigateToTranscript: () -> Unit = { /* Default empty implementation */ },
     dashboardViewModel: DashboardViewModel = hiltViewModel(),
     detailViewModel: SessionDetailViewModel = hiltViewModel()
 ) {
@@ -92,6 +93,7 @@ fun SessionDetailScreen(
                 onResumeClick = { detailViewModel.resumePlayback() },
                 onStopClick = { detailViewModel.stopPlayback() },
                 onClearError = { detailViewModel.clearError() },
+                onNavigateToTranscript = onNavigateToTranscript,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
@@ -112,6 +114,7 @@ private fun SessionDetailContent(
     onResumeClick: () -> Unit,
     onStopClick: () -> Unit,
     onClearError: () -> Unit,
+    onNavigateToTranscript: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -275,11 +278,10 @@ private fun SessionDetailContent(
                     }
                 }
                 
-                // Transcript button (placeholder for future transcript view)
+                // Transcript button
                 OutlinedButton(
-                    onClick = { /* TODO: Navigate to transcript */ },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = session.status == SessionStatus.READY
+                    onClick = { onNavigateToTranscript() },
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("View Transcript")
                 }

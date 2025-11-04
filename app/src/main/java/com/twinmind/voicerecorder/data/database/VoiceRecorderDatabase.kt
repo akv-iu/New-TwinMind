@@ -12,9 +12,10 @@ import com.twinmind.voicerecorder.data.database.entity.*
         RecordingSessionEntity::class,
         AudioChunkEntity::class,
         TranscriptEntity::class,
+        TranscriptChunkEntity::class,
         SummaryEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class VoiceRecorderDatabase : RoomDatabase() {
@@ -22,6 +23,7 @@ abstract class VoiceRecorderDatabase : RoomDatabase() {
     abstract fun recordingSessionDao(): RecordingSessionDao
     abstract fun audioChunkDao(): AudioChunkDao
     abstract fun transcriptDao(): TranscriptDao
+    abstract fun transcriptChunkDao(): TranscriptChunkDao
     abstract fun summaryDao(): SummaryDao
     
     companion object {
@@ -36,6 +38,7 @@ abstract class VoiceRecorderDatabase : RoomDatabase() {
                     "voice_recorder_database"
                 )
                 .fallbackToDestructiveMigration() // Use destructive migration during development
+                .fallbackToDestructiveMigrationOnDowngrade() // Also handle downgrades
                 .build()
                 INSTANCE = instance
                 instance
