@@ -5,12 +5,14 @@ import com.twinmind.voicerecorder.data.repository.AudioChunkRepositoryImpl
 import com.twinmind.voicerecorder.data.repository.AudioRecorderImpl
 import com.twinmind.voicerecorder.data.repository.AudioStorageImpl
 import com.twinmind.voicerecorder.data.repository.SessionRepositoryImpl
+import com.twinmind.voicerecorder.data.repository.SummaryRepositoryImpl
 import com.twinmind.voicerecorder.data.repository.TranscriptionRepositoryImpl
 import com.twinmind.voicerecorder.domain.audio.AudioPlayer
 import com.twinmind.voicerecorder.domain.repository.AudioChunkRepository
 import com.twinmind.voicerecorder.domain.repository.AudioRecorder
 import com.twinmind.voicerecorder.domain.repository.AudioStorage
 import com.twinmind.voicerecorder.domain.repository.SessionRepository
+import com.twinmind.voicerecorder.domain.repository.SummaryRepository
 import com.twinmind.voicerecorder.domain.repository.TranscriptionRepository
 import dagger.Binds
 import dagger.Module
@@ -45,4 +47,8 @@ abstract class AudioModule {
     @Binds
     @Singleton
     abstract fun bindTranscriptionRepository(transcriptionRepositoryImpl: TranscriptionRepositoryImpl): TranscriptionRepository
+    
+    @Binds
+    @Singleton
+    abstract fun bindSummaryRepository(summaryRepositoryImpl: SummaryRepositoryImpl): SummaryRepository
 }

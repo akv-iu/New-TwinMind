@@ -7,6 +7,7 @@ import androidx.navigation.compose.composable
 import com.twinmind.voicerecorder.presentation.screen.DashboardScreen
 import com.twinmind.voicerecorder.presentation.screen.RecordingScreen
 import com.twinmind.voicerecorder.presentation.screen.SessionDetailScreen
+import com.twinmind.voicerecorder.presentation.screen.SummaryScreen
 import com.twinmind.voicerecorder.presentation.screen.TranscriptScreen
 
 @Composable
@@ -67,6 +68,21 @@ fun VoiceRecorderNavigation(
             val sessionId = backStackEntry.arguments?.getString("sessionId")
             if (sessionId != null) {
                 TranscriptScreen(
+                    sessionId = sessionId,
+                    onNavigateBack = {
+                        navController.popBackStack()
+                    },
+                    onNavigateToSummary = { sessionId ->
+                        navController.navigate("summary/$sessionId")
+                    }
+                )
+            }
+        }
+        
+        composable(NavigationRoutes.SUMMARY) { backStackEntry ->
+            val sessionId = backStackEntry.arguments?.getString("sessionId")
+            if (sessionId != null) {
+                SummaryScreen(
                     sessionId = sessionId,
                     onNavigateBack = {
                         navController.popBackStack()

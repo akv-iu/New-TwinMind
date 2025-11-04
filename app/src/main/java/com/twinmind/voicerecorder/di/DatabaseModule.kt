@@ -54,4 +54,9 @@ object DatabaseModule {
     fun provideSummaryDao(database: VoiceRecorderDatabase): SummaryDao {
         return database.summaryDao()
     }
+    
+    @Provides
+    fun provideSessionSummaryDao(database: VoiceRecorderDatabase): SessionSummaryDao {
+        return database.sessionSummaryDao()
+    }
 }

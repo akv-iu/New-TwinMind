@@ -285,15 +285,6 @@ private fun SessionDetailContent(
                 ) {
                     Text("View Transcript")
                 }
-                
-                // Summary button (placeholder for future summary view)
-                OutlinedButton(
-                    onClick = { /* TODO: Navigate to summary */ },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = session.status == SessionStatus.READY
-                ) {
-                    Text("View Summary")
-                }
             }
         }
     }

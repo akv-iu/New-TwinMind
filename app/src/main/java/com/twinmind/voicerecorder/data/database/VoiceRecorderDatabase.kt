@@ -13,9 +13,10 @@ import com.twinmind.voicerecorder.data.database.entity.*
         AudioChunkEntity::class,
         TranscriptEntity::class,
         TranscriptChunkEntity::class,
-        SummaryEntity::class
+        SummaryEntity::class,
+        SessionSummaryEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class VoiceRecorderDatabase : RoomDatabase() {
@@ -25,6 +26,7 @@ abstract class VoiceRecorderDatabase : RoomDatabase() {
     abstract fun transcriptDao(): TranscriptDao
     abstract fun transcriptChunkDao(): TranscriptChunkDao
     abstract fun summaryDao(): SummaryDao
+    abstract fun sessionSummaryDao(): SessionSummaryDao
     
     companion object {
         @Volatile

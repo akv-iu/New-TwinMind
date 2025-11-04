@@ -25,6 +25,7 @@ import java.util.*
 fun TranscriptScreen(
     sessionId: String,
     onNavigateBack: () -> Unit,
+    onNavigateToSummary: (String) -> Unit,
     viewModel: TranscriptViewModel = hiltViewModel()
 ) {
     val transcriptChunks by viewModel.transcriptChunks.collectAsStateWithLifecycle()
@@ -100,6 +101,18 @@ fun TranscriptScreen(
                                     textAlign = TextAlign.Center
                                 )
                             }
+                        }
+                    }
+                }
+                
+                // Generate Summary button
+                if (fullTranscript.isNotBlank()) {
+                    item {
+                        Button(
+                            onClick = { onNavigateToSummary(sessionId) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("🧠 Generate AI Summary")
                         }
                     }
                 }
