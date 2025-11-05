@@ -5,7 +5,6 @@ TwinMind Voice Recorder is an Android application designed for efficient audio r
 
 <p align="center">
 	<img src="https://img.icons8.com/fluency/96/000000/voice-recorder.png" alt="Voice Recorder" width="80"/>
-	<img src="https://img.icons8.com/color/96/000000/google-ai.png" alt="Google AI" width="80"/>
 	<img src="https://img.icons8.com/fluency/96/000000/summary-list.png" alt="Summary" width="80"/>
 </p>
 
